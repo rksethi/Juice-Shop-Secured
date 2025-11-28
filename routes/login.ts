@@ -13,6 +13,8 @@ import { UserModel } from '../models/user'
 import * as models from '../models/index'
 import { type User } from '../data/types'
 import * as utils from '../lib/utils'
+import * as tokenUtils from '../lib/tokenUtils'
+import logger from '../lib/logger'
 
 // vuln-code-snippet start loginAdminChallenge loginBenderChallenge loginJimChallenge
 export function login () {
@@ -20,11 +22,18 @@ export function login () {
     verifyPostLoginChallenges(user) // vuln-code-snippet hide-line
     BasketModel.findOrCreate({ where: { UserId: user.data.id } })
       .then(([basket]: [BasketModel, boolean]) => {
+        // T284: Generate secure access token with proper expiry (handled in authorize function)
         const token = security.authorize(user)
         user.bid = basket.id // keep track of original basket
         security.authenticatedUsers.put(token, user)
+        
+        // T281: Log successful login without exposing token value
+        tokenUtils.logTokenAccess(user.data.id, 'login_success', tokenUtils.hashTokenForLogging(token))
+        
+        // T281: Return token in response body (not query parameter) - already done
         res.json({ authentication: { token, bid: basket.id, umail: user.data.email } })
       }).catch((error: Error) => {
+        logger.error('Error during login', { error: error.message, userId: user.data.id })
         next(error)
       })
   }
@@ -75,6 +84,8 @@ export function login () {
       
       if (!passwordMatch) {
         incrementFailedAttempts(lockoutKey)
+        // T281: Log failed login attempt without exposing sensitive data
+        logger.warn('Failed login attempt', { email: req.body.email, ip: req.ip })
         res.status(401).send(res.__('Invalid email or password.'))
         return
       }

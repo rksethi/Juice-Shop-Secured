@@ -94,6 +94,7 @@ import { resetPassword } from './routes/resetPassword'
 import { logout } from './routes/logout'
 import { serveLogFiles } from './routes/logfileServer'
 import { servePublicFiles } from './routes/fileServer'
+import * as tokenManagement from './routes/tokenManagement'
 import { addMemory, getMemories } from './routes/memory'
 import { changePassword } from './routes/changePassword'
 import { countryMapping } from './routes/countryMapping'
@@ -590,6 +591,11 @@ restoreOverwrittenFilesWithOriginals().then(() => {
   /* Custom Restful API */
   app.post('/rest/user/login', login())
   app.post('/rest/user/logout', logout())
+  
+  /* Token Management Routes - T281, T284, T1919 */
+  app.post('/api/tokens/revoke', security.isAuthorized(), tokenManagement.revokeToken())
+  app.post('/api/tokens/regenerate', security.isAuthorized(), tokenManagement.regenerateToken())
+  app.get('/api/tokens/info', security.isAuthorized(), tokenManagement.getTokenInfo())
   app.get('/rest/user/change-password', changePassword())
   app.post('/rest/user/reset-password', resetPassword())
   app.get('/rest/user/security-question', securityQuestion())

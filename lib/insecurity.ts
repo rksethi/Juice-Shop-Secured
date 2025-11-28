@@ -14,6 +14,8 @@ import sanitizeHtmlLib from 'sanitize-html'
 import sanitizeFilenameLib from 'sanitize-filename'
 import bcrypt from 'bcryptjs'
 import * as utils from './utils'
+import * as tokenUtils from './tokenUtils'
+import logger from './logger'
 
 /* jslint node: true */
 // eslint-disable-next-line @typescript-eslint/prefer-ts-expect-error
@@ -72,8 +74,40 @@ export const cutOffPoisonNullByte = (str: string) => {
 
 export const isAuthorized = () => expressJwt(({ secret: publicKey }) as any)
 export const denyAll = () => expressJwt({ secret: '' + Math.random() } as any)
-export const authorize = (user = {}) => jwt.sign(user, privateKey, { expiresIn: '6h', algorithm: 'RS256' })
-export const verify = (token: string) => token ? (jws.verify as ((token: string, secret: string) => boolean))(token, publicKey) : false
+
+/**
+ * SECURITY FIX: Generate JWT token with secure configuration
+ * T1919: Use JSON Web Token (JWT) securely with RS256 (RSA digital signature)
+ * T284: Generate secure access tokens with proper expiry
+ */
+export const authorize = (user = {}) => {
+  // T1919: Using RS256 (RSA digital signature) which provides authenticity, integrity, and non-repudiation
+  // T284: Token expires in 6 hours, providing reasonable security while maintaining usability
+  const token = jwt.sign(user, privateKey, { expiresIn: '6h', algorithm: 'RS256' })
+  
+  // T281: Log token generation without exposing the token value
+  const userId = (user as any)?.data?.id || (user as any)?.userId || 'unknown'
+  tokenUtils.logTokenAccess(userId as number, 'token_generated', tokenUtils.hashTokenForLogging(token))
+  
+  return token
+}
+
+/**
+ * SECURITY FIX: Verify token with revocation check
+ * T284: Check if token is revoked before verifying
+ */
+export const verify = (token: string) => {
+  if (!token) return false
+  
+  // T284: Check if token is revoked
+  if (tokenUtils.isTokenRevoked(token)) {
+    logger.warn('Attempted use of revoked token', { tokenHash: tokenUtils.hashTokenForLogging(token) })
+    return false
+  }
+  
+  return (jws.verify as ((token: string, secret: string) => boolean))(token, publicKey)
+}
+
 export const decode = (token: string) => { return jws.decode(token)?.payload }
 
 export const sanitizeHtml = (html: string) => sanitizeHtmlLib(html)
@@ -94,9 +128,28 @@ export const authenticatedUsers: IAuthenticatedUsers = {
   put: function (token: string, user: ResponseWithUser) {
     this.tokenMap[token] = user
     this.idMap[user.data.id] = token
+    
+    // T281: Log token usage without exposing the token value
+    tokenUtils.logTokenAccess(user.data.id, 'token_stored', tokenUtils.hashTokenForLogging(token))
   },
   get: function (token?: string) {
-    return token ? this.tokenMap[utils.unquote(token)] : undefined
+    if (!token) return undefined
+    
+    const cleanToken = utils.unquote(token)
+    
+    // T284: Check if token is revoked
+    if (tokenUtils.isTokenRevoked(cleanToken)) {
+      logger.warn('Attempted access with revoked token', { tokenHash: tokenUtils.hashTokenForLogging(cleanToken) })
+      return undefined
+    }
+    
+    const user = this.tokenMap[cleanToken]
+    if (user) {
+      // T281: Log token access without exposing the token value
+      tokenUtils.logTokenAccess(user.data.id, 'token_accessed', tokenUtils.hashTokenForLogging(cleanToken))
+    }
+    
+    return user
   },
   tokenOf: function (user: UserModel) {
     return user ? this.idMap[user.id] : undefined
